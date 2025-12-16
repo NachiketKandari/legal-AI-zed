@@ -1,0 +1,7 @@
+{
+  "name": "LegalIntake AI",
+  "description": "A Neuro-Symbolic Legal Intake Agent POC using Gemini Flash Lite. Decouples process logic from conversational capabilities for high-fidelity legal triage.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
