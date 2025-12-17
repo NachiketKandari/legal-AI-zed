@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { CaseFile, IntakeTurnResponse, AuditResponse, LatencyMetrics, LogEntry, LLMConfig, LLMProvider, DEFAULT_MODELS, ApiCallLog } from '../types';
-import { getSystemInstructionForSlot, getNextNMissingSlots, getNextMissingSlot } from './stateLogic';
+import { getSystemInstructionForSlot, getNextNMissingSlots, getNextMissingSlot, validateField } from './stateLogic';
 import { generateScopedSchema } from './schemaBuilder';
 import { INTAKE_STEPS, MOCK_CLIENT_DB } from '../constants';
 import {
@@ -257,6 +257,12 @@ CRITICAL RULES:
         // MAP FLAT DATA -> NESTED CaseFile structure
         const nestedExtraction: Partial<CaseFile> = {};
         Object.entries(flatData).forEach(([slotId, value]) => {
+            // SYMBOLIC VALIDATION LAYER (Hard Enforcement)
+            if (!validateField(slotId, value)) {
+                log('responder', 'output', `[VALIDATION REJECT] ${slotId} constraint failed`, { value });
+                return; // Skip this field (effectively deleting it from extraction)
+            }
+
             const [vector, field] = slotId.split('.');
             if (vector && field) {
                 if (!nestedExtraction[vector as keyof CaseFile]) {

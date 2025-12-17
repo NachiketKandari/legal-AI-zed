@@ -13,7 +13,12 @@ import { INTAKE_STEPS } from '../constants';
  * Checks if a specific field is "Complete" based on business logic.
  * Handles primitive checks and complex struct validation.
  */
-const isFieldComplete = (fieldId: string, value: any): boolean => {
+/**
+ * Checks if a specific field is "Complete" based on business logic.
+ * Handles primitive checks and complex struct validation.
+ * NOW EXPORTED for use in Gemini Service (Symbolic Validation Layer).
+ */
+export const validateField = (fieldId: string, value: any): boolean => {
   // 1. Basic Null Check
   if (value === null) return false;
 
@@ -89,7 +94,7 @@ export const getNextMissingSlot = (caseFile: CaseFile): string | null => {
       // @ts-ignore: Dynamic access based on schema
       const value = vector[fieldKey];
 
-      if (!isFieldComplete(step.id, value)) {
+      if (!validateField(step.id, value)) {
         return step.id;
       }
     }
@@ -120,7 +125,7 @@ export const getNextNMissingSlots = (caseFile: CaseFile, n: number = 3): { id: s
       // @ts-ignore: Dynamic access based on schema
       const value = vector[fieldKey];
 
-      if (!isFieldComplete(step.id, value)) {
+      if (!validateField(step.id, value)) {
         missingSlots.push({
           id: step.id,
           instruction: getSystemInstructionForSlot(step.id)

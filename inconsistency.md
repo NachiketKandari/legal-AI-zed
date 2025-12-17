@@ -19,15 +19,6 @@ This document tracks known logical flaws, dead code, and potential race conditio
 - **Consequence**: The Thinker might overwrite valid new data from Version 2 with "corrections" from Version 1, or trigger a "verification prompt" that is no longer relevant to the current conversation context.
 - **Mitigation**: Currently handled by React's state merging, but semantic consistency is not guaranteed.
 
-## 3. Validation Logic
-
-### Prompt Constraints vs. Schema Validation
-
-- **Component**: `geminiService.ts` (Responder)
-- **Issue**: Validation relies on "Prompt Engineering" (System 1) rather than strict "Schema Validation" (System 2).
-- **Detail**: We tell the LLM: *"If Full Name is 1 word, do not extract it."* This is a soft constraint. A stronger implementation would extraction whatever is there, and then have a symbolic function `isValidName(name)` return `false`, forcing the state machine to reject the update.
-- **Current State**: We rely on the LLM's instruction following capabilities. If the LLM "hallucinates" that "Nachiket" is a full name, it will extract it, and the State Machine will accept it (unless the Thinker catches it later).
-
 ## 4. API Key Handling
 
 ### Environment Variable Confusion
