@@ -113,12 +113,13 @@ export interface Message {
 
 /**
  * Structured output expected from the LLM (Fast Model).
+ * Optimized for minimal token output - only required fields are extracted_data and response_text.
  */
 export interface IntakeTurnResponse {
-  thought_trace: string;           
-  extracted_data: Partial<CaseFile>; 
-  next_system_action: string;      
-  response_text: string;           
+  thought_trace?: string;  // Optional - removed from responder for latency
+  extracted_data: Partial<CaseFile>;
+  next_system_action?: string;  // Optional - removed from responder for latency
+  response_text: string;
 }
 
 /**
@@ -126,7 +127,39 @@ export interface IntakeTurnResponse {
  */
 export interface AuditResponse {
   audit_reasoning: string;
-  corrected_data: Partial<CaseFile>; 
-  flagged_issue: string | null; 
-  verification_prompt: string | null; 
+  corrected_data: Partial<CaseFile>;
+  flagged_issue: string | null;
+  verification_prompt: string | null;
+  validation_errors?: ValidationError[];
+}
+
+/**
+ * Validation error from the Thinker model.
+ */
+export interface ValidationError {
+  field: string;
+  currentValue: any;
+  issue: string;
+  suggestion?: string;
+}
+
+/**
+ * Detailed latency metrics for performance tracking.
+ */
+export interface LatencyMetrics {
+  promptPrep: number;
+  apiCall: number;
+  parsing: number;
+  total: number;
+}
+
+/**
+ * Log entry for structured logging display.
+ */
+export interface LogEntry {
+  timestamp: number;
+  model: 'responder' | 'thinker';
+  direction: 'input' | 'output';
+  summary: string;
+  data?: any;
 }

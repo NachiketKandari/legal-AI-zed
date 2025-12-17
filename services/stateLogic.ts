@@ -18,13 +18,13 @@ const isFieldComplete = (fieldId: string, value: any): boolean => {
   if (value === null) return false;
 
   // 2. Complex Struct Logic
-  
+
   // A. FAULT ADMISSION: If Yes, need statement.
   if (fieldId === 'liability.fault_admission') {
     if (value.status === null) return false;
     // If they admitted fault, we MUST have the statement/quote
     if (value.status === 'Yes' && !value.statement) return false;
-    return true; 
+    return true;
   }
 
   // B. INJURIES: If Yes, need description.
@@ -63,22 +63,55 @@ export const getNextMissingSlot = (caseFile: CaseFile): string | null => {
   // RULE 2: Linear SOP Scan
   for (const step of INTAKE_STEPS) {
     const [vectorKey, fieldKey] = step.id.split('.');
-    
+
     // Type-safe access to the nested vector
     const vector = caseFile[vectorKey as keyof CaseFile];
-    
+
     if (vector && typeof vector === 'object') {
-       // @ts-ignore: Dynamic access based on schema
-       const value = vector[fieldKey];
-       
-       if (!isFieldComplete(step.id, value)) {
-         return step.id;
-       }
+      // @ts-ignore: Dynamic access based on schema
+      const value = vector[fieldKey];
+
+      if (!isFieldComplete(step.id, value)) {
+        return step.id;
+      }
     }
   }
 
   // RULE 3: Completion
   return "COMPLETE";
+};
+
+/**
+ * Returns the next N missing slots from the SOP.
+ * Used to scope the Responder model's context.
+ */
+export const getNextNMissingSlots = (caseFile: CaseFile, n: number = 3): { id: string; instruction: string }[] => {
+  const missingSlots: { id: string; instruction: string }[] = [];
+
+  // Skip if case is terminated
+  if (caseFile.admin.prior_representation === true) return [];
+  if (caseFile.status === "REJECTED") return [];
+
+  for (const step of INTAKE_STEPS) {
+    if (missingSlots.length >= n) break;
+
+    const [vectorKey, fieldKey] = step.id.split('.');
+    const vector = caseFile[vectorKey as keyof CaseFile];
+
+    if (vector && typeof vector === 'object') {
+      // @ts-ignore: Dynamic access based on schema
+      const value = vector[fieldKey];
+
+      if (!isFieldComplete(step.id, value)) {
+        missingSlots.push({
+          id: step.id,
+          instruction: getSystemInstructionForSlot(step.id)
+        });
+      }
+    }
+  }
+
+  return missingSlots;
 };
 
 /**
@@ -95,7 +128,7 @@ export const getSystemInstructionForSlot = (slot: string): string => {
     // ADMIN
     case "admin.prior_representation": return "Ask if the user already has an attorney. Critical stop question.";
     case "admin.conflict_party": return "Ask for the FULL NAME of the party they are suing (for conflict check).";
-    
+
     // INCIDENT
     case "incident.accident_date": return "Ask for the date of the accident.";
     case "incident.accident_time": return "Ask for the approximate time of day.";
@@ -103,22 +136,22 @@ export const getSystemInstructionForSlot = (slot: string): string => {
     case "incident.weather_conditions": return "Ask about weather conditions.";
     case "incident.vehicle_description": return "Ask for details of the user's vehicle (Year, Make, Model).";
     case "incident.police_report_filed": return "Ask if a police report was filed.";
-    
+
     // LIABILITY
     case "liability.claimant_role": return "Ask if they were driver, passenger, or pedestrian.";
     case "liability.fault_admission": return "Ask if the other driver admitted fault. IF YES: Ask exactly what they said. IF NO: Just confirm no.";
     case "liability.citation_issued": return "Ask if the other driver received a citation.";
     case "liability.witness_presence": return "Ask if there were independent witnesses.";
-    
+
     // DAMAGES (COMPLEX)
     case "damages.injury_details": return "Ask if they were injured. IF YES: You MUST get a description of the injuries. IF NO: Confirm no injuries.";
     case "damages.medical_treatment": return "Ask if they saw a doctor or went to urgent care.";
     case "damages.hospitalization_details": return "Ask if they were hospitalized. IF YES: Ask for how long (duration).";
     case "damages.lost_wages_details": return "Ask if they lost income/wages. IF YES: Ask for the approximate amount lost.";
-    
+
     // CLOSING
     case "admin.insurance_status": return "Ask if the other party is insured.";
-    
+
     // TERMINAL
     case "REJECT_PRIOR_REP": return "Explain we cannot represent them (already represented). Close.";
     case "REJECTED_GENERIC": return "Politely explain we cannot proceed. Close.";
