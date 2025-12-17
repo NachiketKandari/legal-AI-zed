@@ -2,9 +2,7 @@
 
 A React-based Proof of Concept (POC) demonstrating a **Neuro-Symbolic Architecture** for legal case intake. This system combines the flexibility of Large Language Models with the strict rule adherence of symbolic logic (TypeScript interfaces & State Machines).
 
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+![Neuro-Symbolic Legal Intake](./readme_img.png)
 
 ## 🚀 Key Features
 
