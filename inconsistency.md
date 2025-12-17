@@ -4,16 +4,6 @@
 
 This document tracks known logical flaws, dead code, and potential race conditions in the current Neuro-Symbolic architecture. These are items to be addressed in future refactoring cycles.
 
-## 1. Dead Code
-
-### Unused Dialog Templates
-
-- **File**: `services/stateLogic.ts` & `constants.ts`
-- **Item**: `INTAKE_QUESTION_TEMPLATES` and `getDialogResponse`.
-- **Status**: **UNUSED**.
-- **Reason**: The architecture switched to a "Hybrid Responder" where the LLM generates the `response_text` dynamically. The deterministic templates are no longer called by `processTurn`.
-- **Action**: These should be removed to reduce bundle size and confusion.
-
 ## 2. Race Conditions
 
 ### Parallel Thinker vs. User Input

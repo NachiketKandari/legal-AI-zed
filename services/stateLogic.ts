@@ -1,6 +1,6 @@
 
 import { CaseFile } from '../types';
-import { INTAKE_STEPS, INTAKE_QUESTION_TEMPLATES } from '../constants';
+import { INTAKE_STEPS } from '../constants';
 
 /**
  * ------------------------------------------------------------------
@@ -178,15 +178,4 @@ export const getSystemInstructionForSlot = (slot: string): string => {
   }
 };
 
-/**
- * Returns a friendly, conversational question for a given slot.
- * Now acts as our "Deterministic Dialog Manager".
- */
-export const getDialogResponse = (slotId: string | null): string => {
-  if (!slotId) return "Thank you. Our intake is complete.";
-  if (slotId === "REJECT_PRIOR_REP") return "I apologize, but we cannot represent you if you already have an attorney for this matter.";
-  if (slotId === "REJECTED_GENERIC") return "Based on the information provided, we are unable to accept your case at this time.";
-  if (slotId === "COMPLETE") return "Thank you for providing that information. One of our specialists will review your case and contact you soon.";
 
-  return INTAKE_QUESTION_TEMPLATES[slotId] || "Could you please tell me more about that?";
-};

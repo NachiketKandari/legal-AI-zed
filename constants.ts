@@ -89,27 +89,6 @@ export const INITIAL_CASE_FILE: CaseFile = {
   }
 };
 
-export const INTAKE_QUESTION_TEMPLATES: Record<string, string> = {
-  "contact.full_name": "Could you please provide your full legal name?",
-  "contact.email": "What is the best email address to reach you at?",
-  "contact.phone_number": "And what is your phone number?",
-  "admin.prior_representation": "Do you already have an attorney representing you for this specific incident?",
-  "admin.conflict_party": "For our conflict check, what is the full name of the person or entity you are seeking to hold responsible?",
-  "incident.accident_date": "On what date did the accident occur?",
-  "incident.accident_time": "About what time of day did it happen?",
-  "incident.location_jurisdiction": "In which city and state did the incident take place?",
-  "incident.weather_conditions": "What were the weather and road conditions like at the time?",
-  "incident.vehicle_description": "Could you provide the year, make, and model of the vehicle you were in?",
-  "incident.police_report_filed": "Was a police report filed at the scene?",
-  "liability.claimant_role": "Were you the driver, a passenger, or a pedestrian in this incident?",
-  "liability.fault_admission": "Did the other party admit fault or say anything about the cause of the accident?",
-  "liability.citation_issued": "To your knowledge, was the other driver issued a police citation?",
-  "liability.witness_presence": "Were there any independent witnesses who saw what happened?",
-  "damages.injury_details": "Were you or anyone else in your vehicle injured? If so, could you briefly describe the injuries?",
-  "damages.medical_treatment": "Did you receive any medical treatment or see a doctor following the accident?",
-  "damages.hospitalization_details": "Were you hospitalized? If so, for how many days?",
-  "damages.lost_wages_details": "Have you lost any income or wages due to being unable to work? If so, about how much?",
-  "admin.insurance_status": "Lastly, do you know if the other party involved has insurance coverage?"
-};
+
 
 export const SYSTEM_GREETING = "Hello. I am the legal intake assistant. Before we begin discussing your case, could you please provide your Full Name?";

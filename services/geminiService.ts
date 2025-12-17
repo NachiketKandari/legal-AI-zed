@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { CaseFile, IntakeTurnResponse, AuditResponse, LatencyMetrics, LogEntry, LLMConfig, LLMProvider, DEFAULT_MODELS, ApiCallLog } from '../types';
-import { getSystemInstructionForSlot, getNextNMissingSlots, getDialogResponse, getNextMissingSlot } from './stateLogic';
+import { getSystemInstructionForSlot, getNextNMissingSlots, getNextMissingSlot } from './stateLogic';
 import { generateScopedSchema } from './schemaBuilder';
 import { INTAKE_STEPS, MOCK_CLIENT_DB } from '../constants';
 import {
