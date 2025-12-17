@@ -1,6 +1,6 @@
 
 import { CaseFile } from '../types';
-import { INTAKE_STEPS } from '../constants';
+import { INTAKE_STEPS, INTAKE_QUESTION_TEMPLATES } from '../constants';
 
 /**
  * ------------------------------------------------------------------
@@ -17,7 +17,25 @@ const isFieldComplete = (fieldId: string, value: any): boolean => {
   // 1. Basic Null Check
   if (value === null) return false;
 
-  // 2. Complex Struct Logic
+  // 2. Specific Validation Rules (Stricter than just "not null")
+
+  // A. FULL NAME: Must be at least 2 words (First + Last)
+  if (fieldId === 'contact.full_name') {
+    if (typeof value === 'string') {
+      return value.trim().split(/\s+/).length >= 2;
+    }
+    return false;
+  }
+
+  // B. JURISDICTION: Must be detailed (e.g. City, State)
+  if (fieldId === 'incident.location_jurisdiction') {
+    if (typeof value === 'string') {
+      return value.length > 3; // "NY" is too short, "NYC, NY" is ok
+    }
+    return false;
+  }
+
+  // 3. Complex Struct Logic (Existing)
 
   // A. FAULT ADMISSION: If Yes, need statement.
   if (fieldId === 'liability.fault_admission') {
@@ -158,4 +176,17 @@ export const getSystemInstructionForSlot = (slot: string): string => {
     case "COMPLETE": return "Inform user intake is complete.";
     default: return "Gather the missing information.";
   }
+};
+
+/**
+ * Returns a friendly, conversational question for a given slot.
+ * Now acts as our "Deterministic Dialog Manager".
+ */
+export const getDialogResponse = (slotId: string | null): string => {
+  if (!slotId) return "Thank you. Our intake is complete.";
+  if (slotId === "REJECT_PRIOR_REP") return "I apologize, but we cannot represent you if you already have an attorney for this matter.";
+  if (slotId === "REJECTED_GENERIC") return "Based on the information provided, we are unable to accept your case at this time.";
+  if (slotId === "COMPLETE") return "Thank you for providing that information. One of our specialists will review your case and contact you soon.";
+
+  return INTAKE_QUESTION_TEMPLATES[slotId] || "Could you please tell me more about that?";
 };

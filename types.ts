@@ -163,3 +163,66 @@ export interface LogEntry {
   summary: string;
   data?: any;
 }
+
+// ============================================================================
+// LLM PROVIDER TYPES
+// ============================================================================
+
+/**
+ * Supported LLM providers for the fast model (Responder).
+ * - internal: Uses Gemini API with environment variable API_KEY
+ * - local: Uses Ollama for local LLM inference
+ * - openai: Uses OpenAI API with user-provided API key
+ * - claude: Uses Anthropic Claude API with user-provided API key
+ */
+export type LLMProvider = 'internal' | 'local' | 'openai' | 'claude';
+
+/**
+ * Configuration for LLM provider.
+ */
+export interface LLMConfig {
+  provider: LLMProvider;
+  apiKey?: string;           // For OpenAI/Claude user-provided keys
+  localEndpoint?: string;    // For Ollama (default: http://localhost:11434)
+  modelName?: string;        // Override default model for provider
+}
+
+/**
+ * Default model names per provider for fast model use case.
+ */
+export const DEFAULT_MODELS: Record<LLMProvider, string> = {
+  internal: 'gemini-flash-lite-latest',
+  local: 'llama3.2:1b',
+  openai: 'gpt-4o-mini',
+  claude: 'claude-3-haiku-20240307'
+};
+
+// ============================================================================
+// ENHANCED API LOGGING TYPES
+// ============================================================================
+
+/**
+ * Comprehensive API call log with token metrics for debugging.
+ * Includes all information needed to debug AI model calls.
+ */
+export interface ApiCallLog {
+  timestamp: number;
+  model: 'responder' | 'thinker';
+  provider: LLMProvider;
+  modelName: string;
+
+  // Input metrics
+  inputPrompt: string;
+  inputTokens: number;
+
+  // Output metrics
+  outputString: string;
+  outputTokens: number;
+
+  // Performance
+  timeTakenMs: number;
+
+  // Optional metadata
+  error?: string;
+  rawResponse?: any;
+}

@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { CaseFile, LatencyMetrics, LogEntry } from '../types';
+import { CaseFile, LatencyMetrics, LogEntry, ApiCallLog, LLMProvider } from '../types';
 import { INTAKE_STEPS } from '../constants';
 
 interface StateVisualizerProps {
@@ -10,7 +10,8 @@ interface StateVisualizerProps {
   latencyMetrics: LatencyMetrics | null;
   auditStatus: 'IDLE' | 'ACTIVE';
   auditTAT: number | null;
-  logs: LogEntry[];
+  apiCallLogs?: ApiCallLog[];
+  currentProvider?: LLMProvider;
 }
 
 // Helper to safely get value from nested object using string path "vector.field"
@@ -88,11 +89,13 @@ const StateVisualizer: React.FC<StateVisualizerProps> = ({
   latencyMetrics,
   auditStatus,
   auditTAT,
-  logs
+  apiCallLogs = [],
+  currentProvider = 'internal'
 }) => {
   const [isMetricsOpen, setIsMetricsOpen] = useState(true);
   const [isAuditOpen, setIsAuditOpen] = useState(false);
-  const [isLogsOpen, setIsLogsOpen] = useState(false);
+  const [isApiLogsOpen, setIsApiLogsOpen] = useState(false);
+  const [expandedLogIndex, setExpandedLogIndex] = useState<number | null>(null);
 
   // LOGIC: Determine the active step
   const isCaseActive = ['QUALIFICATION', 'INTAKE'].includes(caseFile.status);
@@ -106,8 +109,7 @@ const StateVisualizer: React.FC<StateVisualizerProps> = ({
     });
   }
 
-  // Filter logs for display
-  const recentLogs = logs.slice(-10);
+
 
   return (
     <div className="h-full bg-slate-100 flex flex-col border-l border-slate-300">
@@ -231,52 +233,111 @@ const StateVisualizer: React.FC<StateVisualizerProps> = ({
           )}
         </div>
 
-        {/* LOGS SECTION (NEW) */}
+
+
+        {/* API CALL LOGS (DETAILED TOKEN METRICS) */}
         <div className="mb-4 bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm">
           <button
-            onClick={() => setIsLogsOpen(!isLogsOpen)}
-            className="w-full px-3 py-2 bg-slate-800 flex items-center justify-between text-xs font-bold text-slate-200 hover:bg-slate-700 transition-colors"
+            onClick={() => setIsApiLogsOpen(!isApiLogsOpen)}
+            className="w-full px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 flex items-center justify-between text-xs font-bold text-white hover:from-emerald-700 hover:to-teal-700 transition-colors"
           >
             <span className="flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11.707 4.707a1 1 0 00-1.414-1.414L10 9.586 8.707 8.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8 10.414l1.293 1.293a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
-              Model Logs ({logs.length})
+              API Call Logs ({apiCallLogs.length})
+              {currentProvider !== 'internal' && (
+                <span className="px-1.5 py-0.5 bg-white/20 rounded text-[10px]">
+                  {currentProvider.toUpperCase()}
+                </span>
+              )}
             </span>
-            <svg className={`h-4 w-4 transition-transform ${isLogsOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className={`h-4 w-4 transition-transform ${isApiLogsOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
-          {isLogsOpen && (
-            <div className="max-h-48 overflow-y-auto">
-              {recentLogs.length > 0 ? (
-                <div className="divide-y divide-slate-100">
-                  {recentLogs.map((log, i) => (
-                    <div key={i} className="px-3 py-2 text-xs hover:bg-slate-50">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${log.model === 'responder'
-                            ? 'bg-blue-100 text-blue-700'
-                            : 'bg-amber-100 text-amber-700'
-                          }`}>
-                          {log.model}
-                        </span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${log.direction === 'input'
-                            ? 'bg-green-50 text-green-600'
-                            : 'bg-purple-50 text-purple-600'
-                          }`}>
-                          {log.direction}
-                        </span>
-                        <span className="text-slate-400 text-[10px]">
-                          {new Date(log.timestamp).toLocaleTimeString()}
-                        </span>
-                      </div>
-                      <p className="text-slate-600 truncate">{log.summary}</p>
+          {isApiLogsOpen && (
+            <div className="max-h-96 overflow-y-auto bg-slate-50">
+              {apiCallLogs.length > 0 ? (
+                <div className="divide-y divide-slate-200">
+                  {apiCallLogs.slice(-10).reverse().map((log, i) => (
+                    <div key={i} className="text-xs bg-white">
+                      {/* CELL: Collapsed View (Metrics Only) */}
+                      <button
+                        onClick={() => setExpandedLogIndex(expandedLogIndex === i ? null : i)}
+                        className="w-full px-4 py-3 hover:bg-slate-50 text-left transition-colors flex items-center justify-between group"
+                      >
+                        <div className="flex items-center gap-3">
+                          {/* Model Badge */}
+                          <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${log.model === 'responder'
+                            ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                            : 'bg-amber-100 text-amber-700 border border-amber-200'
+                            }`}>
+                            {log.model}
+                          </span>
+
+                          {/* Metrics (Visible when collapsed) */}
+                          <div className="flex items-center gap-4 text-slate-600 font-mono">
+                            <span className="flex items-center gap-1" title="Input Tokens">
+                              <span className="text-green-600">IN:</span>{log.inputTokens}
+                            </span>
+                            <span className="flex items-center gap-1" title="Output Tokens">
+                              <span className="text-purple-600">OUT:</span>{log.outputTokens}
+                            </span>
+                            <span className="flex items-center gap-1" title="Time Taken">
+                              <span className="text-slate-400">⏱</span>{log.timeTakenMs}ms
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Expand Icon */}
+                        <svg className={`h-4 w-4 text-slate-400 transition-transform group-hover:text-slate-600 ${expandedLogIndex === i ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      {/* CELL: Expanded View (Full Details) */}
+                      {expandedLogIndex === i && (
+                        <div className="px-4 pb-4 border-t border-slate-100 bg-slate-50/50 space-y-3">
+
+                          {/* Metadata */}
+                          <div className="pt-2 flex items-center justify-between text-[10px] text-slate-500">
+                            <span>Provider: {log.provider}</span>
+                            <span>Model: {log.modelName}</span>
+                            <span>{new Date(log.timestamp).toLocaleTimeString()}</span>
+                          </div>
+
+                          {/* Input */}
+                          <div>
+                            <span className="text-[10px] font-bold text-green-700 block mb-1 uppercase tracking-wide">Input Prompt</span>
+                            <div className="bg-white border border-green-200 rounded p-2 text-[10px] font-mono whitespace-pre-wrap max-h-48 overflow-y-auto text-slate-700 shadow-sm">
+                              {log.inputPrompt}
+                            </div>
+                          </div>
+
+                          {/* Output */}
+                          <div>
+                            <span className="text-[10px] font-bold text-purple-700 block mb-1 uppercase tracking-wide">Output Response</span>
+                            <div className="bg-white border border-purple-200 rounded p-2 text-[10px] font-mono whitespace-pre-wrap max-h-48 overflow-y-auto text-slate-700 shadow-sm">
+                              {log.outputString}
+                            </div>
+                          </div>
+
+                          {/* Error */}
+                          {log.error && (
+                            <div className="bg-red-50 border border-red-200 rounded p-2 text-red-600 text-[10px]">
+                              <strong>Error:</strong> {log.error}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="p-4 text-center text-slate-400 text-xs">
-                  No logs yet. Start chatting to see model activity.
+                <div className="p-8 text-center text-slate-400 text-xs">
+                  <p>No API calls recorded yet.</p>
+                  <p>Start chatting to see detailed token usage and latency metrics.</p>
                 </div>
               )}
             </div>
@@ -287,9 +348,9 @@ const StateVisualizer: React.FC<StateVisualizerProps> = ({
         <div className="mb-4 flex items-center justify-between bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
           <span className="text-xs font-bold text-slate-500 uppercase">Case Status</span>
           <span className={`px-2 py-1 rounded-md text-xs font-bold ${caseFile.status === 'INTAKE' ? 'bg-blue-100 text-blue-700' :
-              caseFile.status === 'REJECTED' ? 'bg-red-100 text-red-700' :
-                caseFile.status === 'CLOSED' ? 'bg-green-100 text-green-700' :
-                  'bg-yellow-100 text-yellow-700'
+            caseFile.status === 'REJECTED' ? 'bg-red-100 text-red-700' :
+              caseFile.status === 'CLOSED' ? 'bg-green-100 text-green-700' :
+                'bg-yellow-100 text-yellow-700'
             }`}>
             {caseFile.status}
           </span>

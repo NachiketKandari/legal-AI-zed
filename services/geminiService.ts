@@ -1,10 +1,37 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { CaseFile, IntakeTurnResponse, AuditResponse, LatencyMetrics, LogEntry } from '../types';
-import { getSystemInstructionForSlot, getNextNMissingSlots } from './stateLogic';
+import { CaseFile, IntakeTurnResponse, AuditResponse, LatencyMetrics, LogEntry, LLMConfig, LLMProvider, DEFAULT_MODELS, ApiCallLog } from '../types';
+import { getSystemInstructionForSlot, getNextNMissingSlots, getDialogResponse, getNextMissingSlot } from './stateLogic';
+import { generateScopedSchema } from './schemaBuilder';
 import { INTAKE_STEPS, MOCK_CLIENT_DB } from '../constants';
+import {
+    addApiCallLog,
+    getApiCallLogs,
+    clearApiCallLogs,
+    estimateTokenCount,
+    callOpenAI,
+    callClaude,
+    callOllama,
+    LLMResponse,
+    DEFAULT_LLM_CONFIG
+} from './llmProviders';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Re-export for backward compatibility
+export { getApiCallLogs, clearApiCallLogs };
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || process.env.API_KEY || "" });
+
+// ============================================================================
+// LLM CONFIGURATION STATE
+// ============================================================================
+let currentLLMConfig: LLMConfig = DEFAULT_LLM_CONFIG;
+
+export const setLLMConfig = (config: LLMConfig): void => {
+    currentLLMConfig = { ...config };
+    console.log(`[LLM CONFIG] Provider set to: ${config.provider}, Model: ${config.modelName || DEFAULT_MODELS[config.provider]}`);
+};
+
+export const getLLMConfig = (): LLMConfig => ({ ...currentLLMConfig });
 
 // ============================================================================
 // LOGGING UTILITY
@@ -65,6 +92,46 @@ const checkConflictInDb = (name: string): boolean => {
 };
 
 // ============================================================================
+// GEMINI INTERNAL CALL (with token logging)
+// ============================================================================
+const callGeminiInternal = async (
+    systemInstruction: string,
+    userMessage: string,
+    apiHistory: any[],
+    responseSchema: any,
+    modelName: string = 'gemini-flash-lite-latest',
+    stopSequences?: string[]
+): Promise<LLMResponse> => {
+    const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [
+            ...apiHistory,
+            { role: 'user', parts: [{ text: userMessage }] }
+        ],
+        config: {
+            systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema,
+            temperature: 0,
+            thinkingConfig: { thinkingBudget: 0 },
+            stopSequences
+        }
+    });
+
+    const rawOutput = response.text || "{}";
+
+    // Gemini API returns usage metadata
+    const usageMetadata = (response as any).usageMetadata || {};
+
+    return {
+        text: rawOutput,
+        inputTokens: usageMetadata.promptTokenCount || estimateTokenCount(systemInstruction + userMessage),
+        outputTokens: usageMetadata.candidatesTokenCount || estimateTokenCount(rawOutput),
+        rawResponse: response
+    };
+};
+
+// ============================================================================
 // RESPONDER (FAST MODEL)
 // ============================================================================
 // Responsible for: Taking user response, filling max 3 fields, asking next question
@@ -93,107 +160,39 @@ export const processTurn = async (
         ).join('\n')
         : 'ALL STEPS COMPLETE - Thank user and summarize case.';
 
-    // Log input - show the actual prompt going to the model
-    log('responder', 'input', `Prompt: "${userMessage}"`, {
-        systemPrompt: `Legal intake. Extract data, ask next question. Pending: ${nextSlots.map(s => s.id).join(', ')}`,
-        userMessage,
-        pendingQuestions: nextSlots.map(s => s.id)
-    });
+    // 2. CONCISE SYSTEM PROMPT (Hybrid: Flattened Data + LLM Dialog)
+    const constraints = nextSlots.map(s => {
+        if (s.id === 'contact.full_name') return ` - ${s.id}: Must be 2+ words (First + Last Name).`;
+        if (s.id === 'incident.location_jurisdiction') return ` - ${s.id}: Must include City AND State/Region.`;
+        return ` - ${s.id}`;
+    }).join('\n');
 
-    // 2. MINIMAL SYSTEM PROMPT (Optimized for low token output)
-    const systemInstruction = `Legal intake. Extract data, ask next question.
-Pending: ${scopedSopChecklist}
-Rules: Extract max 3 fields. Ask the first pending question. Be brief.`;
+    const systemInstruction = `Extract data into flat JSON keys.
+Allowed Keys & Constraints:
+${constraints}
+
+You MUST also include a "response_text" key.
+CRITICAL RULES:
+1. If an extracted value fails its constraint (e.g. only 1 name provided), do NOT extract it (omit key) and ask specifically for the missing detail in "response_text".
+2. If all values are valid, ask for the *FIRST* missing key in the list above. Do NOT skip steps.
+3. Minified JSON only.`;
+
+    const fullPrompt = `System: ${systemInstruction}\n\nUser: ${userMessage}`;
+
+    // Log input
+    log('responder', 'input', `Extracting from: "${userMessage}"`, {
+        allowedKeys: nextSlots.map(s => s.id),
+        userMessage
+    });
 
     promptPrepTime = performance.now() - promptPrepStart;
 
-    // 3. MINIMAL RESPONSE SCHEMA (Only extracted_data + response_text)
-    // Removed thought_trace and next_system_action to reduce output tokens
-    const responseSchema = {
-        type: Type.OBJECT,
-        properties: {
-            extracted_data: {
-                type: Type.OBJECT,
-                properties: {
-                    contact: {
-                        type: Type.OBJECT,
-                        properties: {
-                            full_name: { type: Type.STRING },
-                            phone_number: { type: Type.STRING },
-                            email: { type: Type.STRING },
-                        }
-                    },
-                    incident: {
-                        type: Type.OBJECT,
-                        properties: {
-                            accident_date: { type: Type.STRING },
-                            accident_time: { type: Type.STRING },
-                            location_jurisdiction: { type: Type.STRING },
-                            police_report_filed: { type: Type.BOOLEAN },
-                            weather_conditions: { type: Type.STRING },
-                            vehicle_description: { type: Type.STRING },
-                        }
-                    },
-                    liability: {
-                        type: Type.OBJECT,
-                        properties: {
-                            fault_admission: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    status: { type: Type.STRING, enum: ["Yes", "No", "Unknown"] },
-                                    statement: { type: Type.STRING }
-                                }
-                            },
-                            citation_issued: { type: Type.BOOLEAN },
-                            witness_presence: { type: Type.BOOLEAN },
-                            claimant_role: { type: Type.STRING, enum: ["Driver", "Passenger", "Pedestrian"] },
-                        }
-                    },
-                    damages: {
-                        type: Type.OBJECT,
-                        properties: {
-                            injury_details: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    has_injury: { type: Type.BOOLEAN },
-                                    description: { type: Type.STRING }
-                                }
-                            },
-                            medical_treatment: { type: Type.BOOLEAN },
-                            hospitalization_details: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    was_hospitalized: { type: Type.BOOLEAN },
-                                    duration: { type: Type.STRING }
-                                }
-                            },
-                            lost_wages_details: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    has_lost_wages: { type: Type.BOOLEAN },
-                                    amount: { type: Type.NUMBER }
-                                }
-                            },
-                        }
-                    },
-                    admin: {
-                        type: Type.OBJECT,
-                        properties: {
-                            insurance_status: { type: Type.BOOLEAN },
-                            prior_representation: { type: Type.BOOLEAN },
-                            conflict_party: { type: Type.STRING },
-                        }
-                    },
-                    status: { type: Type.STRING, enum: ["QUALIFICATION", "INTAKE", "REJECTED", "REFERRED", "CLOSED"] }
-                }
-            },
-            response_text: { type: Type.STRING },
-        },
-        required: ["extracted_data", "response_text"],
-    };
+    // 3. DYNAMIC FLAT SCHEMA
+    const requestedFieldIds = nextSlots.map(s => s.id);
+    const responseSchema = generateScopedSchema(requestedFieldIds);
 
     try {
-        const RECENT_HISTORY_LIMIT = 10;
+        const RECENT_HISTORY_LIMIT = 6; // Shorten history for speed
         const recentHistory = history.slice(-RECENT_HISTORY_LIMIT);
 
         const apiHistory = recentHistory.length > 0
@@ -205,63 +204,99 @@ Rules: Extract max 3 fields. Ask the first pending question. Be brief.`;
 
         const apiCallStart = performance.now();
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-flash-lite-latest',
-            contents: [
-                ...apiHistory,
-                { role: 'user', parts: [{ text: userMessage }] }
-            ],
-            config: {
+        let llmResponse: LLMResponse;
+        const provider = currentLLMConfig.provider;
+        const modelName = currentLLMConfig.modelName || DEFAULT_MODELS[provider];
+
+        // =====================================================================
+        // PROVIDER-SPECIFIC API CALLS
+        // =====================================================================
+        if (provider === 'internal') {
+            llmResponse = await callGeminiInternal(
                 systemInstruction,
-                responseMimeType: "application/json",
+                userMessage,
+                apiHistory,
                 responseSchema,
-                temperature: 0,
-            }
-        });
+                modelName
+            );
+        } else if (provider === 'openai') {
+            llmResponse = await callOpenAI(userMessage, systemInstruction, currentLLMConfig, responseSchema);
+        } else if (provider === 'claude') {
+            llmResponse = await callClaude(userMessage, systemInstruction, currentLLMConfig);
+        } else if (provider === 'local') {
+            llmResponse = await callOllama(userMessage, systemInstruction, currentLLMConfig);
+        } else {
+            throw new Error(`Unknown provider: ${provider}`);
+        }
 
         apiCallTime = performance.now() - apiCallStart;
 
-        // Log RAW output before parsing
-        const rawOutput = response.text || "{}";
-        log('responder', 'output', `Raw model response (${rawOutput.length} chars)`, {
-            rawOutput: rawOutput.substring(0, 500) + (rawOutput.length > 500 ? '...' : '')
+        // =====================================================================
+        // LOGGING & PARSING
+        // =====================================================================
+        addApiCallLog({
+            timestamp: Date.now(),
+            model: 'responder',
+            provider,
+            modelName,
+            inputPrompt: fullPrompt,
+            inputTokens: llmResponse.inputTokens,
+            outputString: llmResponse.text,
+            outputTokens: llmResponse.outputTokens,
+            timeTakenMs: Math.round(apiCallTime)
         });
 
         const parseStart = performance.now();
-        const cleanText = cleanJsonResponse(rawOutput);
-        const parsed = JSON.parse(cleanText) as IntakeTurnResponse;
+        const cleanText = cleanJsonResponse(llmResponse.text);
+        const flatData = JSON.parse(cleanText) as Record<string, any>;
 
-        if (!parsed.extracted_data) parsed.extracted_data = {};
-        if (!parsed.response_text) parsed.response_text = "I'm having trouble understanding. Could you please repeat that?";
+        // Separate response_text from data fields
+        const response_text = flatData.response_text || "I'm sorry, I didn't catch that. Could you please repeat?";
+        delete flatData.response_text; // Remove from data so it doesn't try to map to vectors
 
-        // Symbolic logic: Conflict check
-        const extractedConflictParty = parsed.extracted_data.admin?.conflict_party;
+        // MAP FLAT DATA -> NESTED CaseFile structure
+        const nestedExtraction: Partial<CaseFile> = {};
+        Object.entries(flatData).forEach(([slotId, value]) => {
+            const [vector, field] = slotId.split('.');
+            if (vector && field) {
+                if (!nestedExtraction[vector as keyof CaseFile]) {
+                    (nestedExtraction as any)[vector] = {};
+                }
+                (nestedExtraction as any)[vector][field] = value;
+            }
+        });
+
+        // UPDATE TEMPORARY CASE FILE (for conflict check only now)
+        const updatedCaseFile = { ...currentCaseFile };
+        Object.entries(nestedExtraction).forEach(([vector, fields]) => {
+            if (fields && typeof fields === 'object') {
+                (updatedCaseFile as any)[vector] = { ...(updatedCaseFile as any)[vector], ...(fields as any) };
+            }
+        });
+
+        // NO LOCAL DIALOG GENERATION - We use the LLM's response_text directly
+
+        // Conflict check remains symbolic
+        const extractedConflictParty = flatData["admin.conflict_party"];
         if (extractedConflictParty) {
             const isConflict = checkConflictInDb(extractedConflictParty);
             if (isConflict) {
-                console.log(`[SYMBOLIC LOGIC] Conflict Detected: ${extractedConflictParty}`);
-                parsed.extracted_data.status = 'REJECTED';
-                parsed.extracted_data.rejection_reason = `Conflict of interest: ${extractedConflictParty}`;
-                parsed.response_text = `I apologize, but we already represent ${extractedConflictParty}. Ethically, we cannot proceed. This session is closed.`;
-                parsed.next_system_action = 'REJECTED_GENERIC';
-            } else {
-                if (parsed.extracted_data.status === 'REJECTED' && !parsed.extracted_data.admin?.prior_representation) {
-                    parsed.extracted_data.status = 'INTAKE';
-                }
+                nestedExtraction.status = 'REJECTED';
+                (nestedExtraction as any).admin = { ...(nestedExtraction as any).admin, conflict_party: extractedConflictParty };
+                return {
+                    extracted_data: nestedExtraction,
+                    response_text: `I apologize, but we already represent ${extractedConflictParty}. Ethically, we cannot proceed.`,
+                    next_system_action: 'REJECTED_GENERIC'
+                };
             }
         }
 
         parseTime = performance.now() - parseStart;
         const totalTime = performance.now() - startTotal;
 
-        // Log parsed output
-        log('responder', 'output', `Parsed: ${parsed.response_text.substring(0, 50)}...`, {
-            fieldsExtracted: Object.keys(parsed.extracted_data).length,
-            responseText: parsed.response_text
-        });
-
         return {
-            ...parsed,
+            extracted_data: nestedExtraction,
+            response_text,
             latencyMetrics: {
                 promptPrep: Math.round(promptPrepTime),
                 apiCall: Math.round(apiCallTime),
@@ -273,6 +308,20 @@ Rules: Extract max 3 fields. Ask the first pending question. Be brief.`;
     } catch (error: any) {
         console.error("Gemini Service Error (Responder):", error);
         log('responder', 'output', `ERROR: ${error.message || 'Unknown error'}`, { error: error.message });
+
+        // Log error to API call buffer
+        addApiCallLog({
+            timestamp: Date.now(),
+            model: 'responder',
+            provider: currentLLMConfig.provider,
+            modelName: currentLLMConfig.modelName || DEFAULT_MODELS[currentLLMConfig.provider],
+            inputPrompt: fullPrompt,
+            inputTokens: estimateTokenCount(fullPrompt),
+            outputString: '',
+            outputTokens: 0,
+            timeTakenMs: Math.round(performance.now() - startTotal),
+            error: error.message || 'Unknown error'
+        });
 
         return {
             thought_trace: "System Error or JSON Parse Failure",
@@ -290,7 +339,10 @@ Rules: Extract max 3 fields. Ask the first pending question. Be brief.`;
 };
 
 // ============================================================================
-// THINKER (SLOW MODEL)
+// THINKER (SLOW MODEL) - Always uses Gemini internal API
+// ============================================================================
+// ============================================================================
+// THINKER (SLOW MODEL) - Always uses Gemini internal API with REASONING
 // ============================================================================
 // Responsible for: Validating entire case file, correcting data, flagging issues
 export const auditCaseFile = async (
@@ -298,6 +350,7 @@ export const auditCaseFile = async (
     history: { role: string; content: string }[]
 ): Promise<AuditResponse> => {
 
+    const startTotal = performance.now();
     const today = new Date();
 
     // Log input
@@ -308,30 +361,36 @@ export const auditCaseFile = async (
     });
 
     const systemInstruction = `
-      You are a Senior Legal Data Auditor (Thinker). You validate the ENTIRE case file.
+      You are a Senior Legal Data Auditor (Thinker). You validate the ENTIRE case file against the chat history.
       Current Date: ${today.toISOString().split('T')[0]}
       
-      ### YOUR RESPONSIBILITIES
-      1. **VALIDATE ALL DATA** in the case file
-      2. **FIX DATES**: Convert relative dates to YYYY-MM-DD
-      3. **VALIDATE ENUMS**: 
-         - claimant_role MUST be: "Driver", "Passenger", or "Pedestrian"
-         - fault_admission.status MUST be: "Yes", "No", or "Unknown"
-      4. **VALIDATE STRUCTS**: 
-         - If 'injury_details.has_injury' is true but 'description' is null -> Flag
-         - If 'fault_admission.status' is Yes but 'statement' is null -> Flag
-         - If 'hospitalization_details.was_hospitalized' is true but 'duration' is null -> Flag
-         - If 'lost_wages_details.has_lost_wages' is true but 'amount' is null -> Flag
+      ### PRIMARY OBJECTIVES
+      1. **BACKGROUND EXTRACTION**: The Responder only looks at the next 3 questions. scan the CHAT HISTORY for ANY information that belongs in the Case File but is currently null. If found, ADD IT to 'corrected_data'.
+      2. **VALIDATE & CORRECT**: Fix dates (relative -> YYYY-MM-DD) and logical inconsistencies.
+      3. **STRICT ENUM ENFORCEMENT**: 
+         - checking 'fault_admission.status' (Yes/No/Unknown). If user words are vague (e.g. "I think so", "maybe"), set it to NULL (do not guess).
+         - checking 'claimant_role' (Driver/Passenger/Pedestrian).
+         - If an enum is currently filled but contradicts history, CORRECT IT.
+      4. **STRICT FIELD COMPLETENESS**:
+         - **contact.full_name**: MUST contain at least First and Last name. If only one name provided (e.g. "Nachiket" or "Smith"), set it to NULL.
+         - **incident.location_jurisdiction**: MUST contain City AND State. If subjective (e.g. "around here", "down the street"), set it to NULL.
+      5. **STRUCT VALIDATION**:
+         - If 'injury_details.has_injury' is true but 'description' is missing -> Set 'has_injury' to NULL (force re-ask).
+         - If 'fault_admission.status' is Yes but 'statement' is missing -> Set 'status' to NULL (force re-ask).
       
-      ### ACTION
-      - Set 'corrected_data' to fix values or set to NULL if vague
-      - If fixing a value (like date), provide 'verification_prompt' to confirm with user
-      - If invalidating, provide 'flagged_issue' describing what's wrong
-      - Include 'validation_errors' array for all issues found
+      ### ACTIONABLE OUTPUT
+      - **corrected_data**: A Partial<CaseFile> containing specific vector updates.
+        - To INVALIDATE a field (force re-ask), set it to null explicitly.
+        - To FILL a field missed by Responder, provide the value.
+      - **audit_reasoning**: Brief explanation of your logic.
       
-      ### FULL CASE FILE TO VALIDATE
+      ### FULL CASE FILE
       ${JSON.stringify(currentCaseFile, null, 2)}
     `;
+
+    // Filter relevant history key for context
+    const chatContext = history.map(h => `${h.role.toUpperCase()}: ${h.content}`).join('\n');
+    const fullPrompt = `System: ${systemInstruction}\n\nChat History (Most Recent First):\n${chatContext}`;
 
     // Audit Schema matches Type.ts structures
     const responseSchema = {
@@ -341,11 +400,26 @@ export const auditCaseFile = async (
             corrected_data: {
                 type: Type.OBJECT,
                 properties: {
+                    contact: {
+                        type: Type.OBJECT,
+                        properties: {
+                            full_name: { type: Type.STRING, nullable: true },
+                            email: { type: Type.STRING, nullable: true },
+                            phone_number: { type: Type.STRING, nullable: true }
+                        },
+                        nullable: true
+                    },
                     incident: {
                         type: Type.OBJECT,
                         properties: {
                             accident_date: { type: Type.STRING, nullable: true },
-                        }
+                            accident_time: { type: Type.STRING, nullable: true },
+                            location_jurisdiction: { type: Type.STRING, nullable: true },
+                            police_report_filed: { type: Type.BOOLEAN, nullable: true },
+                            weather_conditions: { type: Type.STRING, nullable: true },
+                            vehicle_description: { type: Type.STRING, nullable: true },
+                        },
+                        nullable: true
                     },
                     liability: {
                         type: Type.OBJECT,
@@ -359,62 +433,103 @@ export const auditCaseFile = async (
                                 nullable: true
                             },
                             claimant_role: { type: Type.STRING, enum: ["Driver", "Passenger", "Pedestrian"], nullable: true },
-                        }
+                            citation_issued: { type: Type.BOOLEAN, nullable: true },
+                            witness_presence: { type: Type.BOOLEAN, nullable: true }
+                        },
+                        nullable: true
                     },
                     damages: {
                         type: Type.OBJECT,
                         properties: {
                             injury_details: {
                                 type: Type.OBJECT,
-                                properties: { has_injury: { type: Type.BOOLEAN }, description: { type: Type.STRING } },
+                                properties: { has_injury: { type: Type.BOOLEAN, nullable: true }, description: { type: Type.STRING, nullable: true } },
                                 nullable: true
                             },
-                        }
-                    }
-                }
-            },
-            flagged_issue: { type: Type.STRING, nullable: true },
-            verification_prompt: { type: Type.STRING, nullable: true },
-            validation_errors: {
-                type: Type.ARRAY,
-                items: {
-                    type: Type.OBJECT,
-                    properties: {
-                        field: { type: Type.STRING },
-                        currentValue: { type: Type.STRING },
-                        issue: { type: Type.STRING },
-                        suggestion: { type: Type.STRING, nullable: true }
-                    }
+                            medical_treatment: { type: Type.BOOLEAN, nullable: true },
+                            hospitalization_details: {
+                                type: Type.OBJECT,
+                                properties: { was_hospitalized: { type: Type.BOOLEAN, nullable: true }, duration: { type: Type.STRING, nullable: true } },
+                                nullable: true
+                            },
+                            lost_wages_details: {
+                                type: Type.OBJECT,
+                                properties: { has_lost_wages: { type: Type.BOOLEAN, nullable: true }, amount: { type: Type.NUMBER, nullable: true } },
+                                nullable: true
+                            }
+                        },
+                        nullable: true
+                    },
+                    admin: {
+                        type: Type.OBJECT,
+                        properties: {
+                            insurance_status: { type: Type.BOOLEAN, nullable: true },
+                            prior_representation: { type: Type.BOOLEAN, nullable: true },
+                            conflict_party: { type: Type.STRING, nullable: true },
+                        },
+                        nullable: true
+                    },
                 },
                 nullable: true
-            }
+            },
+            // We keep these for schema compatibility but will likely ignore in UI
+            flagged_issue: { type: Type.STRING, nullable: true },
+            verification_prompt: { type: Type.STRING, nullable: true },
         }
     };
 
     try {
+        const apiCallStart = performance.now();
+        const modelName = 'gemini-2.5-flash'; // Fallback to stable highly capable model
+
         const response = await ai.models.generateContent({
-            model: 'gemini-2.0-flash',
+            model: modelName,
             contents: [
-                { role: 'user', parts: [{ text: "Perform comprehensive validation of the case file." }] }
+                { role: 'user', parts: [{ text: fullPrompt }] }
             ],
             config: {
-                systemInstruction,
+                systemInstruction, // Valid for 2.0 Flash
                 responseMimeType: "application/json",
                 responseSchema,
                 temperature: 0.1,
             }
         });
 
-        const cleanText = cleanJsonResponse(response.text || "{}");
+        const apiCallTime = performance.now() - apiCallStart;
+        const rawOutput = response.text || "{}";
+
+        // Get usage metadata
+        const usageMetadata = (response as any).usageMetadata || {};
+        const inputTokens = usageMetadata.promptTokenCount || estimateTokenCount(fullPrompt);
+        const outputTokens = usageMetadata.candidatesTokenCount || estimateTokenCount(rawOutput);
+
+        // =====================================================================
+        // COMPREHENSIVE API CALL LOGGING FOR THINKER
+        // =====================================================================
+        const apiLog: ApiCallLog = {
+            timestamp: Date.now(),
+            model: 'thinker',
+            provider: 'internal',
+            modelName: modelName,
+            inputPrompt: fullPrompt,
+            inputTokens: inputTokens,
+            outputString: rawOutput,
+            outputTokens: outputTokens,
+            timeTakenMs: Math.round(apiCallTime)
+        };
+        addApiCallLog(apiLog);
+
+        const cleanText = cleanJsonResponse(rawOutput);
         const parsed = JSON.parse(cleanText) as AuditResponse;
         if (!parsed.corrected_data) parsed.corrected_data = {};
 
         // Log output
-        log('thinker', 'output', `Validation complete: ${parsed.validation_errors?.length || 0} issues found`, {
+        log('thinker', 'output', `Validation complete: ${Object.keys(parsed.corrected_data).length} corrections (${outputTokens} tokens, ${Math.round(apiCallTime)}ms)`, {
             reasoning: parsed.audit_reasoning,
-            hasCorrections: Object.keys(parsed.corrected_data).length > 0,
-            flaggedIssue: parsed.flagged_issue,
-            validationErrors: parsed.validation_errors
+            corrections: parsed.corrected_data,
+            inputTokens,
+            outputTokens,
+            timeTakenMs: Math.round(apiCallTime)
         });
 
         return parsed;
@@ -423,12 +538,25 @@ export const auditCaseFile = async (
         console.error("Thinker Error", error);
         log('thinker', 'output', `ERROR: ${(error as any).message || 'Unknown error'}`, { error });
 
+        // Log error to API call buffer
+        addApiCallLog({
+            timestamp: Date.now(),
+            model: 'thinker',
+            provider: 'internal',
+            modelName: 'gemini-2.5-flash',
+            inputPrompt: fullPrompt,
+            inputTokens: estimateTokenCount(fullPrompt),
+            outputString: '',
+            outputTokens: 0,
+            timeTakenMs: Math.round(performance.now() - startTotal),
+            error: (error as any).message || 'Unknown error'
+        });
+
         return {
             audit_reasoning: "Failed",
             corrected_data: {},
             flagged_issue: null,
             verification_prompt: null,
-            validation_errors: []
         };
     }
 };

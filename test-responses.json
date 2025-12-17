@@ -1,0 +1,175 @@
+{
+    "description": "Dummy response sheet for testing the legal intake flow. Use these responses in order to complete the full 19-question intake process.",
+    "usage": "Copy each response and paste it into the chat when asked the corresponding question.",
+    "test_scenario": "Car accident case - Driver was rear-ended at a red light",
+    "responses": [
+        {
+            "step": 1,
+            "field_id": "contact.full_name",
+            "question": "Full Name",
+            "sample_response": "Michael Anderson",
+            "notes": "Start of intake"
+        },
+        {
+            "step": 2,
+            "field_id": "contact.email",
+            "question": "Email Address",
+            "sample_response": "michael.anderson@email.com",
+            "notes": null
+        },
+        {
+            "step": 3,
+            "field_id": "admin.prior_representation",
+            "question": "Prior Representation (Do you already have an attorney?)",
+            "sample_response": "No, I don't have an attorney yet",
+            "notes": "CRITICAL: Saying 'Yes' will terminate the intake immediately"
+        },
+        {
+            "step": 4,
+            "field_id": "admin.conflict_party",
+            "question": "Conflict Check (Name of party you're suing)",
+            "sample_response": "James Wilson",
+            "notes": "Conflict check against MOCK_CLIENT_DB. Names like 'John Doe' or 'Sarah Connor' will trigger rejection"
+        },
+        {
+            "step": 5,
+            "field_id": "incident.accident_date",
+            "question": "Accident Date",
+            "sample_response": "December 10th, 2024",
+            "notes": "The Thinker model will convert relative dates like 'last Tuesday' to YYYY-MM-DD format"
+        },
+        {
+            "step": 6,
+            "field_id": "incident.accident_time",
+            "question": "Accident Time",
+            "sample_response": "Around 5:30 PM during rush hour",
+            "notes": null
+        },
+        {
+            "step": 7,
+            "field_id": "incident.location_jurisdiction",
+            "question": "Location (City/State)",
+            "sample_response": "San Francisco, California",
+            "notes": "Important for jurisdiction determination"
+        },
+        {
+            "step": 8,
+            "field_id": "incident.weather_conditions",
+            "question": "Weather Conditions",
+            "sample_response": "It was clear and dry, good visibility",
+            "notes": null
+        },
+        {
+            "step": 9,
+            "field_id": "incident.vehicle_description",
+            "question": "Vehicle Description",
+            "sample_response": "I was driving a 2022 Honda Accord, silver color",
+            "notes": "Year, make, model, and optionally color"
+        },
+        {
+            "step": 10,
+            "field_id": "incident.police_report_filed",
+            "question": "Police Report Filed",
+            "sample_response": "Yes, the police came and filed a report",
+            "notes": "Boolean field"
+        },
+        {
+            "step": 11,
+            "field_id": "liability.claimant_role",
+            "question": "Claimant Role (Driver/Passenger/Pedestrian)",
+            "sample_response": "I was the driver",
+            "notes": "Must be one of: Driver, Passenger, Pedestrian"
+        },
+        {
+            "step": 12,
+            "field_id": "liability.fault_admission",
+            "question": "Fault Admission (Did the other driver admit fault?)",
+            "sample_response": "Yes, he said 'I'm sorry, I wasn't paying attention' right after the accident",
+            "notes": "COMPLEX STRUCT: If Yes, requires the actual statement. If No, just confirm"
+        },
+        {
+            "step": 13,
+            "field_id": "liability.citation_issued",
+            "question": "Citation Issued to Other Driver",
+            "sample_response": "Yes, the other driver received a citation for following too closely",
+            "notes": "Boolean field"
+        },
+        {
+            "step": 14,
+            "field_id": "liability.witness_presence",
+            "question": "Witnesses Present",
+            "sample_response": "Yes, there were two witnesses who stopped to help",
+            "notes": "Boolean field"
+        },
+        {
+            "step": 15,
+            "field_id": "damages.injury_details",
+            "question": "Injury Details",
+            "sample_response": "Yes, I have whiplash and lower back pain. My neck hurts when I turn it",
+            "notes": "COMPLEX STRUCT: If has_injury=true, requires description"
+        },
+        {
+            "step": 16,
+            "field_id": "damages.medical_treatment",
+            "question": "Medical Treatment Received",
+            "sample_response": "Yes, I went to urgent care the next day and have been seeing a chiropractor",
+            "notes": "Boolean field"
+        },
+        {
+            "step": 17,
+            "field_id": "damages.hospitalization_details",
+            "question": "Hospitalization Details",
+            "sample_response": "No, I wasn't hospitalized",
+            "alt_response_hospitalized": "Yes, I was hospitalized overnight for observation",
+            "notes": "COMPLEX STRUCT: If was_hospitalized=true, requires duration"
+        },
+        {
+            "step": 18,
+            "field_id": "damages.lost_wages_details",
+            "question": "Lost Wages Details",
+            "sample_response": "Yes, I missed 2 weeks of work. I lost about $3500 in wages",
+            "alt_response_no_wages": "No, I was able to work from home",
+            "notes": "COMPLEX STRUCT: If has_lost_wages=true, requires amount"
+        },
+        {
+            "step": 19,
+            "field_id": "admin.insurance_status",
+            "question": "Insurance Status (Is the other party insured?)",
+            "sample_response": "Yes, they have insurance through State Farm",
+            "notes": "Final question - completes the intake"
+        }
+    ],
+    "rejection_test_scenarios": {
+        "prior_representation": {
+            "step": 3,
+            "response": "Yes, I already hired an attorney last week",
+            "expected_result": "Intake terminates with REJECT_PRIOR_REP status"
+        },
+        "conflict_detected": {
+            "step": 4,
+            "response": "I'm suing John Doe",
+            "expected_result": "Intake terminates with REJECTED status due to conflict (John Doe is in MOCK_CLIENT_DB)"
+        }
+    },
+    "quick_test_flow": [
+        "Michael Anderson",
+        "michael.anderson@email.com",
+        "No, I don't have an attorney",
+        "James Wilson",
+        "December 10th, 2024",
+        "5:30 PM",
+        "San Francisco, California",
+        "Clear and dry",
+        "2022 Honda Accord",
+        "Yes, police report was filed",
+        "I was the driver",
+        "Yes, he said sorry I wasn't paying attention",
+        "Yes, he got a citation",
+        "Yes, there were two witnesses",
+        "Yes, I have whiplash and back pain",
+        "Yes, I went to urgent care",
+        "No, I wasn't hospitalized",
+        "Yes, I lost $3500 in wages over 2 weeks",
+        "Yes, they have State Farm insurance"
+    ]
+}

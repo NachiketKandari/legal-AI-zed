@@ -4,13 +4,237 @@ import { v4 as uuidv4 } from 'uuid';
 import ChatInterface from './components/ChatInterface';
 import StateVisualizer from './components/StateVisualizer';
 import TranscriptModal from './components/TranscriptModal';
-import { CaseFile, Message, IntakeTurnResponse, AuditResponse, LatencyMetrics, LogEntry } from './types';
+import { CaseFile, Message, IntakeTurnResponse, AuditResponse, LatencyMetrics, LLMProvider, LLMConfig, DEFAULT_MODELS, ApiCallLog } from './types';
 import { INITIAL_CASE_FILE, SYSTEM_GREETING } from './constants';
-import { processTurn, auditCaseFile, getLogBuffer } from './services/geminiService';
+import { processTurn, auditCaseFile, setLLMConfig, getLLMConfig, getApiCallLogs } from './services/geminiService';
 import { getNextMissingSlot } from './services/stateLogic';
+import { fetchModelsForProvider, ModelInfo } from './services/llmProviders';
 
 // ENVIRONMENT CHECK
-const hasApiKey = !!process.env.API_KEY;
+const hasApiKey = !!(process.env.GEMINI_API_KEY || process.env.API_KEY);
+
+// ============================================================================
+// LLM SETTINGS PANEL COMPONENT
+// ============================================================================
+interface LLMSettingsPanelProps {
+  isOpen: boolean;
+  onClose: () => void;
+  config: LLMConfig;
+  onSave: (config: LLMConfig) => void;
+}
+
+const LLMSettingsPanel: React.FC<LLMSettingsPanelProps> = ({ isOpen, onClose, config, onSave }) => {
+  const [provider, setProvider] = useState<LLMProvider>(config.provider);
+  const [apiKey, setApiKey] = useState(config.apiKey || '');
+  const [localEndpoint, setLocalEndpoint] = useState(config.localEndpoint || 'http://localhost:11434');
+  const [modelName, setModelName] = useState(config.modelName || '');
+
+  // Dynamic model loading
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+  // Fetch models when provider, apiKey, or localEndpoint changes
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const loadModels = async () => {
+      setIsLoadingModels(true);
+      try {
+        const models = await fetchModelsForProvider(provider, apiKey, localEndpoint);
+        setAvailableModels(models);
+        // Set default model if none selected
+        if (!modelName && models.length > 0) {
+          setModelName(models[0].id);
+        }
+      } catch (error) {
+        console.error('Failed to load models:', error);
+      } finally {
+        setIsLoadingModels(false);
+      }
+    };
+
+    loadModels();
+  }, [isOpen, provider, apiKey, localEndpoint]);
+
+  const handleSave = () => {
+    const newConfig: LLMConfig = {
+      provider,
+      apiKey: (provider === 'openai' || provider === 'claude') ? apiKey : undefined,
+      localEndpoint: provider === 'local' ? localEndpoint : undefined,
+      modelName: modelName || undefined
+    };
+    onSave(newConfig);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-white font-bold text-lg flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+              </svg>
+              LLM Provider Settings
+            </h2>
+            <button onClick={onClose} className="text-white/80 hover:text-white">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <p className="text-white/70 text-sm mt-1">Configure the fast model (Responder) provider</p>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 space-y-4">
+          {/* Provider Selection */}
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-2">Provider</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['internal', 'local', 'openai', 'claude'] as LLMProvider[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => {
+                    setProvider(p);
+                    setModelName(''); // Reset model name on provider change
+                  }}
+                  className={`px-4 py-2 rounded-lg border-2 text-sm font-medium transition-all ${provider === p
+                    ? 'border-purple-500 bg-purple-50 text-purple-700'
+                    : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                    }`}
+                >
+                  {p === 'internal' && '🔵 Gemini'}
+                  {p === 'local' && '🖥️ Local (Ollama)'}
+                  {p === 'openai' && '🟢 OpenAI'}
+                  {p === 'claude' && '🟠 Claude'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* API Key (for OpenAI/Claude) */}
+          {(provider === 'openai' || provider === 'claude') && (
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-2">
+                {provider === 'openai' ? 'OpenAI API Key' : 'Anthropic API Key'}
+              </label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={provider === 'openai' ? 'sk-...' : 'sk-ant-...'}
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Your API key is stored locally and never sent to our servers.
+              </p>
+            </div>
+          )}
+
+          {/* Local Endpoint (for Ollama) */}
+          {provider === 'local' && (
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-2">Ollama Endpoint</label>
+              <input
+                type="text"
+                value={localEndpoint}
+                onChange={(e) => setLocalEndpoint(e.target.value)}
+                placeholder="http://localhost:11434"
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Ensure Ollama is running locally with the model installed.
+              </p>
+            </div>
+          )}
+
+          {/* Model Selection Dropdown */}
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+              Model
+              {isLoadingModels && (
+                <span className="text-xs text-purple-500 animate-pulse">Loading...</span>
+              )}
+            </label>
+            <select
+              value={modelName || DEFAULT_MODELS[provider]}
+              onChange={(e) => setModelName(e.target.value)}
+              disabled={isLoadingModels}
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none bg-white cursor-pointer disabled:opacity-50"
+            >
+              {availableModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name}{model.description ? ` - ${model.description}` : ''}
+                </option>
+              ))}
+              {availableModels.length === 0 && (
+                <option value={DEFAULT_MODELS[provider]}>{DEFAULT_MODELS[provider]}</option>
+              )}
+            </select>
+            <p className="text-xs text-slate-500 mt-1">
+              {availableModels.length > 0
+                ? `${availableModels.length} models available`
+                : 'Enter API key to load models'}
+            </p>
+          </div>
+
+          {/* Provider Info */}
+          <div className="bg-slate-50 rounded-lg p-3 text-xs text-slate-600">
+            {provider === 'internal' && (
+              <>
+                <p className="font-bold text-slate-700">🔵 Gemini (Internal)</p>
+                <p>Uses the environment API_KEY. Fastest option with constrained decoding.</p>
+              </>
+            )}
+            {provider === 'local' && (
+              <>
+                <p className="font-bold text-slate-700">🖥️ Local (Ollama)</p>
+                <p>Runs models locally. Install Ollama and pull a model like <code>llama3.2:1b</code>.</p>
+              </>
+            )}
+            {provider === 'openai' && (
+              <>
+                <p className="font-bold text-slate-700">🟢 OpenAI</p>
+                <p>Uses gpt-4o-mini by default. Fast and cost-effective for chat applications.</p>
+              </>
+            )}
+            {provider === 'claude' && (
+              <>
+                <p className="font-bold text-slate-700">🟠 Claude (Anthropic)</p>
+                <p>Uses claude-3-haiku by default. Fast with excellent instruction following.</p>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 bg-slate-50 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold rounded-lg transition-colors"
+          >
+            Save Settings
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN APP COMPONENT
+// ============================================================================
 
 const App: React.FC = () => {
   // STATE: Chat History
@@ -36,12 +260,40 @@ const App: React.FC = () => {
   // STATE: Detailed Latency Metrics
   const [latencyMetrics, setLatencyMetrics] = useState<LatencyMetrics | null>(null);
 
-  // STATE: Log Buffer for UI Display
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+
+
+  // STATE: API Call Logs (with token metrics)
+  const [apiCallLogs, setApiCallLogs] = useState<ApiCallLog[]>([]);
 
   // STATE: Supervisor Audit Metrics
   const [auditStatus, setAuditStatus] = useState<'IDLE' | 'ACTIVE'>('IDLE');
   const [auditTAT, setAuditTAT] = useState<number | null>(null);
+
+  // STATE: LLM Settings
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [llmConfig, setLlmConfigState] = useState<LLMConfig>(getLLMConfig());
+
+  // Load settings from localStorage on mount
+  useEffect(() => {
+    const savedConfig = localStorage.getItem('llmConfig');
+    if (savedConfig) {
+      try {
+        const parsed = JSON.parse(savedConfig) as LLMConfig;
+        setLlmConfigState(parsed);
+        setLLMConfig(parsed);
+      } catch (e) {
+        console.error('Failed to load LLM config from localStorage', e);
+      }
+    }
+  }, []);
+
+  // Handle settings save
+  const handleSaveSettings = (config: LLMConfig) => {
+    setLlmConfigState(config);
+    setLLMConfig(config);
+    localStorage.setItem('llmConfig', JSON.stringify(config));
+    console.log('LLM Config saved:', config);
+  };
 
   // COMPUTED: Check if workflow is finished
   const isCaseComplete = useMemo(() => {
@@ -61,7 +313,8 @@ const App: React.FC = () => {
       const auditResult: AuditResponse = await auditCaseFile(currentCaseFileSnapshot, historyForApi);
 
       // Update logs from buffer
-      setLogs(getLogBuffer());
+
+      setApiCallLogs(getApiCallLogs());
 
       // If the auditor suggests changes
       if (auditResult.corrected_data && Object.keys(auditResult.corrected_data).length > 0) {
@@ -71,34 +324,16 @@ const App: React.FC = () => {
           const updated = { ...prev };
           const patches = auditResult.corrected_data;
           // Deep merge specific vectors monitored by audit
+          if (patches.contact) updated.contact = { ...updated.contact, ...patches.contact };
           if (patches.incident) updated.incident = { ...updated.incident, ...patches.incident };
           if (patches.damages) updated.damages = { ...updated.damages, ...patches.damages };
           if (patches.liability) updated.liability = { ...updated.liability, ...patches.liability };
+          if (patches.admin) updated.admin = { ...updated.admin, ...patches.admin };
           return updated;
         });
 
-        // CASE 1: Auto-Correction (Determinable) - Prompt for Confirmation
-        if (auditResult.verification_prompt) {
-          const verifyMsg: Message = {
-            id: uuidv4(),
-            role: 'assistant',
-            content: auditResult.verification_prompt,
-            timestamp: Date.now(),
-            thought: `THINKER AUTO-CORRECTION: ${auditResult.audit_reasoning}`
-          };
-          setMessages(prev => [...prev, verifyMsg]);
-        }
-        // CASE 2: Invalidation (Indeterminable) - Flag Issue
-        else if (auditResult.flagged_issue) {
-          const correctionMsg: Message = {
-            id: uuidv4(),
-            role: 'assistant',
-            content: `I've reviewed our notes and realized I need to be more specific. ${auditResult.flagged_issue} Could you please clarify that detail?`,
-            timestamp: Date.now(),
-            thought: `THINKER VALIDATION: ${auditResult.audit_reasoning}`
-          };
-          setMessages(prev => [...prev, correctionMsg]);
-        }
+        // NOTE: Thinker is now "Quiet". It logs but does not interrupt.
+        // If a field was invalidated (set to null), the Responder will pick it up in the next turn.
       }
     } catch (e) {
       console.error("Thinker Error", e);
@@ -142,7 +377,8 @@ const App: React.FC = () => {
       }
 
       // Update logs from buffer
-      setLogs(getLogBuffer());
+
+      setApiCallLogs(getApiCallLogs());
 
       // 3. Update the Case File (Symbolic State)
       let updatedCaseFile = { ...caseFile };
@@ -193,8 +429,8 @@ const App: React.FC = () => {
     }
   }, [messages, caseFile]);
 
-  // BLOCKER: Missing API Key
-  if (!hasApiKey) {
+  // BLOCKER: Missing API Key (only for internal provider)
+  if (!hasApiKey && llmConfig.provider === 'internal') {
     return (
       <div className="h-screen flex items-center justify-center bg-slate-100">
         <div className="bg-white p-8 rounded-lg shadow-lg max-w-md text-center">
@@ -202,6 +438,21 @@ const App: React.FC = () => {
           <p className="text-slate-600 mb-4">
             This POC requires a Google Gemini API Key. Please ensure <code>process.env.API_KEY</code> is set in your environment.
           </p>
+          <p className="text-slate-500 text-sm mb-4">
+            Alternatively, you can configure a different LLM provider.
+          </p>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-bold"
+          >
+            Configure LLM Provider
+          </button>
+          <LLMSettingsPanel
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            config={llmConfig}
+            onSave={handleSaveSettings}
+          />
         </div>
       </div>
     );
@@ -245,8 +496,21 @@ const App: React.FC = () => {
             latencyMetrics={latencyMetrics}
             auditStatus={auditStatus}
             auditTAT={auditTAT}
-            logs={logs}
+            apiCallLogs={apiCallLogs}
+            currentProvider={llmConfig.provider}
           />
+
+          {/* Settings Button */}
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="absolute top-4 right-32 bg-purple-600/90 hover:bg-purple-700 text-white p-2 rounded-lg text-xs backdrop-blur-sm transition-colors flex items-center gap-1"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+            </svg>
+            LLM
+          </button>
+
           <button
             onClick={() => setIsTranscriptOpen(true)}
             className="absolute top-4 right-4 bg-slate-700/80 hover:bg-slate-800 text-white p-2 rounded-lg text-xs backdrop-blur-sm transition-colors"
@@ -263,6 +527,14 @@ const App: React.FC = () => {
         onClose={() => setIsTranscriptOpen(false)}
         messages={messages}
         finalCaseFile={caseFile}
+      />
+
+      {/* MODAL: LLM Settings */}
+      <LLMSettingsPanel
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        config={llmConfig}
+        onSave={handleSaveSettings}
       />
     </div>
   );
