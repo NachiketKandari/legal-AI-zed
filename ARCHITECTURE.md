@@ -383,7 +383,7 @@ interface ApiCallLog {
 
 ### Console Output Format
 
-```
+```text
 ================================================================================
 [RESPONDER] API CALL LOG - internal (gemini-flash-lite-latest)
 ================================================================================
@@ -403,7 +403,7 @@ System: Legal intake. Extract data, ask next question...
 
 ## File Structure
 
-```
+```text
 legal-AI-zed/
 ├── App.tsx                 # Main React component, state management
 ├── types.ts                # All TypeScript interfaces
