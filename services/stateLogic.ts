@@ -146,7 +146,6 @@ export const getSystemInstructionForSlot = (slot: string): string => {
     // CONTACT
     case "contact.full_name": return "Ask ONLY for the user's full legal name.";
     case "contact.email": return "Ask ONLY for the user's email address.";
-    case "contact.phone_number": return "Ask ONLY for the user's phone number.";
 
     // ADMIN
     case "admin.prior_representation": return "Ask if the user already has an attorney. Critical stop question.";
@@ -180,6 +179,47 @@ export const getSystemInstructionForSlot = (slot: string): string => {
     case "REJECTED_GENERIC": return "Politely explain we cannot proceed. Close.";
     case "COMPLETE": return "Inform user intake is complete.";
     default: return "Gather the missing information.";
+  }
+};
+
+/**
+ * Returns a polite, template-based question for a given slot.
+ * USED WHEN: The user has filled the previous scope completely > we skip LLM generation > we append this.
+ */
+export const getTemplateQuestionForSlot = (slot: string): string => {
+  switch (slot) {
+    // CONTACT
+    case "contact.full_name": return "Could you please provide your full legal name?";
+    case "contact.email": return "What is the best email address to reach you at?";
+
+    // ADMIN
+    case "admin.prior_representation": return "Do you currently have an attorney representing you for this matter?";
+    case "admin.conflict_party": return "What is the full legal name of the party you are filing a claim against?";
+
+    // INCIDENT
+    case "incident.accident_date": return "What was the date of the accident?";
+    case "incident.accident_time": return "Approximately what time did the accident occur?";
+    case "incident.location_jurisdiction": return "In which City and State did the incident happen?";
+    case "incident.weather_conditions": return "What were the weather conditions like at the time?";
+    case "incident.vehicle_description": return "Could you describe your vehicle (Year, Make, Model)?";
+    case "incident.police_report_filed": return "Was a police report filed at the scene?";
+
+    // LIABILITY
+    case "liability.claimant_role": return "Were you the driver, a passenger, or a pedestrian?";
+    case "liability.fault_admission": return "Did the other driver admit fault at the scene? If so, what exactly did they say?";
+    case "liability.citation_issued": return "Was the other driver issued a citation?";
+    case "liability.witness_presence": return "Were there any independent witnesses present?";
+
+    // DAMAGES
+    case "damages.injury_details": return "Did you sustain any injuries? If yes, please briefly describe them.";
+    case "damages.medical_treatment": return "Have you sought medical treatment or gone to urgent care?";
+    case "damages.hospitalization_details": return "Were you hospitalized after the accident? If so, for how long?";
+    case "damages.lost_wages_details": return "Have you lost any income or wages due to this accident? If yes, approximately how much?";
+
+    // CLOSING
+    case "admin.insurance_status": return "Do you know if the other party is insured?";
+
+    default: return "Could you please provide the missing information?";
   }
 };
 

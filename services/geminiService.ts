@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { CaseFile, IntakeTurnResponse, AuditResponse, LatencyMetrics, LogEntry, LLMConfig, LLMProvider, DEFAULT_MODELS, ApiCallLog } from '../types';
-import { getSystemInstructionForSlot, getNextNMissingSlots, getNextMissingSlot, validateField } from './stateLogic';
+import { getSystemInstructionForSlot, getNextNMissingSlots, getNextMissingSlot, validateField, getTemplateQuestionForSlot } from './stateLogic';
 import { generateScopedSchema } from './schemaBuilder';
 import { INTAKE_STEPS, MOCK_CLIENT_DB } from '../constants';
 import {
@@ -173,9 +173,25 @@ ${constraints}
 
 You MUST also include a "response_text" key.
 CRITICAL RULES:
-1. If an extracted value fails its constraint (e.g. only 1 name provided), do NOT extract it (omit key) and ask specifically for the missing detail in "response_text".
-2. If all values are valid, ask for the *FIRST* missing key in the list above. Do NOT skip steps.
-3. Minified JSON only.`;
+1. **OUTPUT FORMAT**: Return a JSON object with **ALL** Allowed Keys.
+   - Found -> Extract value.
+   - Not Found / Invalid -> Set to \`null\`. DO NOT omit key.
+
+2. **STRICT NULL HANDLING** (Highest Priority):
+   - If **ANY** Allowed Key is \`null\`:
+     - You are **FORBIDDEN** from saying "Thank you" or "I've noted those details".
+     - In "response_text", you MUST specifically ask for the missing information.
+     - If multiple keys are missing, ask for the FIRST one in the list.
+
+3. **ALL DATA**: If (and ONLY if) **ALL** Allowed Keys are non-null and valid:
+   - In "response_text", output ONLY a polite confirmation (e.g., "Thank you, I've noted those details.").
+   - DO NOT ask further questions (the system will handle the next step).
+
+4. **INVALID DATA**: If constraint fails (e.g. name too short):
+   - Set value to \`null\`.
+   - Ask for correction in "response_text".
+
+5. Minified JSON only.`;
 
     const fullPrompt = `System: ${systemInstruction}\n\nUser: ${userMessage}`;
 
@@ -281,8 +297,16 @@ CRITICAL RULES:
         });
 
         // NO LOCAL DIALOG GENERATION - We use the LLM's response_text directly
+        // UNLESS: All requested fields were successfully extracted. In that case, we append the Template Question.
 
-        // Conflict check remains symbolic
+        // 1. Check completeness of current scope
+        const allRequestedFieldsFilled = requestedFieldIds.every(id => {
+            const [v, f] = id.split('.');
+            // Check if valid value exists in nestedExtraction
+            return (nestedExtraction as any)[v]?.[f] !== undefined;
+        });
+
+        // 2. Conflict check remains symbolic
         const extractedConflictParty = flatData["admin.conflict_party"];
         if (extractedConflictParty) {
             const isConflict = checkConflictInDb(extractedConflictParty);
@@ -297,12 +321,43 @@ CRITICAL RULES:
             }
         }
 
+        // 3. Hybrid Response Logic
+        let finalResponseText = response_text;
+
+        if (allRequestedFieldsFilled) {
+            // "Wait Text" is already in finalResponseText (from LLM).
+            // We need to calculate the TRUE next step and append the template question.
+
+            // Create a temp object to check next state purely for question generation
+            const projection = {
+                ...currentCaseFile,
+                ...(Object.keys(nestedExtraction).length ? nestedExtraction : {})
+            };
+
+            // Merge deep structs simpler for projection (already done above in 'updatedCaseFile' essentially)
+            // Actually 'updatedCaseFile' above was only a shallow copy + patch. Let's make sure it's valid.
+            const projectedCaseFile = { ...currentCaseFile };
+            Object.entries(nestedExtraction).forEach(([vector, fields]) => {
+                if (fields && typeof fields === 'object') {
+                    (projectedCaseFile as any)[vector] = { ...(projectedCaseFile as any)[vector], ...(fields as any) };
+                }
+            });
+
+            // What is the NEXT missing slot after this batch?
+            const nextSlot = getNextMissingSlot(projectedCaseFile as CaseFile);
+
+            if (nextSlot && nextSlot !== "COMPLETE" && nextSlot !== "REJECT_PRIOR_REP" && nextSlot !== "REJECTED_GENERIC") {
+                const nextQuestion = getTemplateQuestionForSlot(nextSlot);
+                finalResponseText = `${response_text} ${nextQuestion}`;
+            }
+        }
+
         parseTime = performance.now() - parseStart;
         const totalTime = performance.now() - startTotal;
 
         return {
             extracted_data: nestedExtraction,
-            response_text,
+            response_text: finalResponseText,
             latencyMetrics: {
                 promptPrep: Math.round(promptPrepTime),
                 apiCall: Math.round(apiCallTime),
@@ -411,7 +466,6 @@ export const auditCaseFile = async (
                         properties: {
                             full_name: { type: Type.STRING, nullable: true },
                             email: { type: Type.STRING, nullable: true },
-                            phone_number: { type: Type.STRING, nullable: true }
                         },
                         nullable: true
                     },

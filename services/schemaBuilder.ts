@@ -12,7 +12,6 @@ const SCHEMA_DEFINITIONS: Record<string, any> = {
         type: Type.OBJECT,
         properties: {
             full_name: { type: Type.STRING },
-            phone_number: { type: Type.STRING },
             email: { type: Type.STRING },
         }
     },
@@ -106,6 +105,7 @@ export const generateScopedSchema = (missingSlots: string[]): any => {
     };
 
     const props = scopedSchema.properties;
+    const requiredFields: string[] = ["response_text"];
 
     // Iterate through requested slots and inject ONLY those definitions
     missingSlots.forEach(slotId => {
@@ -115,9 +115,15 @@ export const generateScopedSchema = (missingSlots: string[]): any => {
         const masterVector = SCHEMA_DEFINITIONS[vectorKey];
         if (masterVector && masterVector.properties && masterVector.properties[fieldKey]) {
             // Inject the field definition using the flat dot-notation ID as the key
-            props[slotId] = masterVector.properties[fieldKey];
+            // MODIFICATION: Force nullable: true for all fields in this scoped schema
+            const fieldDef = { ...masterVector.properties[fieldKey], nullable: true };
+            props[slotId] = fieldDef;
+            requiredFields.push(slotId); // Force valid JSON to include this key
         }
     });
+
+    // Enforce that ALL requested keys key MUST be present (value can be null)
+    scopedSchema.required = requiredFields;
 
     return scopedSchema;
 };
