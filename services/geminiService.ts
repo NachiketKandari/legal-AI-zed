@@ -178,6 +178,8 @@ CRITICAL RULES:
    - Not Found / Invalid -> Set to \`null\`. DO NOT omit key.
 
 2. **STRICT NULL HANDLING** (Highest Priority):
+   // This rule prevents the model from assuming "partial success" is "complete success".
+   // It forces the model to ask follow-up questions if even ONE field is missing.
    - If **ANY** Allowed Key is \`null\`:
      - You are **FORBIDDEN** from saying "Thank you" or "I've noted those details".
      - In "response_text", you MUST specifically ask for the missing information.

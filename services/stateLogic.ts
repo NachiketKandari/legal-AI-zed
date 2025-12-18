@@ -17,6 +17,11 @@ import { INTAKE_STEPS } from '../constants';
  * Checks if a specific field is "Complete" based on business logic.
  * Handles primitive checks and complex struct validation.
  * NOW EXPORTED for use in Gemini Service (Symbolic Validation Layer).
+ *
+ * VALIDATION RULES:
+ * - contact.full_name: Must be at least 2 words (First + Last).
+ * - incident.location: Must be > 3 chars (e.g. "City, State").
+ * - Structs: Must have required dependent fields (e.g. "Yes" -> "Statement").
  */
 export const validateField = (fieldId: string, value: any): boolean => {
   // 1. Basic Null Check

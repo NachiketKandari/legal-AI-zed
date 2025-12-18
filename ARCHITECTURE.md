@@ -174,7 +174,18 @@ To bridge the gap between Neural extraction and Symbolic rules, we employ **Prom
 
 - **Dynamic Prompting**: The FSM detects which slots are next (e.g., `contact.full_name`).
 - **Constraint Injection**: The system prompt is updated with specific rules for those slots (e.g., "Must be 2+ words").
-- **Prompt-Based Validation**: The LLM is instructed to **omit** extraction if the user input violates the constraint (e.g., only providing "Nachiket" instead of "Nachiket Kandari"), forcing the model to re-ask the question via `response_text`.
+- **Strict Null Handling**: The prompt forbidden "Thank you" messages if any requested key is returned as `null`. This forces the LLM to prioritize data completeness over conversational politeness.
+
+### Symbolic Validation Layer (The Gatekeeper)
+
+To solve the "Hallucination Problem" (System 1 giving bad data), we implemented a strict symbolic filter in `geminiService.ts`:
+
+1. **LLM Extraction**: `{"contact.full_name": "Nachiket"}` (Single Name)
+2. **Validation Check**: `validateField("contact.full_name", "Nachiket")` -> Returns `false` (Must be 2+ words).
+3. **Field Rejection**: The key is DELETED from the extraction object.
+4. **State Effect**: The FSM sees the field as still `null` and re-queues the question "What is your last name?".
+
+This ensures that only strictly valid data enters the Case File.
 
 ### SOP Definition ([constants.ts](file:///Users/nachiket/workspace/github.com/Public/legal-AI-zed/constants.ts))
 
